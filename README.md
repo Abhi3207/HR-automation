@@ -57,3 +57,12 @@ python main.py ui
 - **FastAPI** — REST API
 - **Streamlit** — Dashboard UI
 - **SQLAlchemy + SQLite** — Data persistence
+
+
+Next Plans:
+
+    implement a2a
+    make each agent independent service
+    one ask to multiple agent flows
+
+    major: evaluation, at what steps and how to automate and maintain it in production
