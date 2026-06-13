@@ -10,6 +10,7 @@ Flow:
 
 from langgraph.graph import StateGraph, END
 
+from config.logging_config import get_logger
 from state.hr_state import HRState
 from graph.supervisor import supervisor_node, route_to_agent
 from agents.job_posting_agent import job_posting_node
@@ -18,6 +19,8 @@ from agents.interview_scheduling_agent import interview_scheduling_node
 from agents.feedback_agent import feedback_node
 from agents.ranking_agent import ranking_node
 from agents.final_selection_agent import final_selection_node
+
+logger = get_logger(__name__)
 
 
 def build_pipeline():
@@ -69,8 +72,8 @@ def build_pipeline():
     # --- Compile the graph ---
     compiled = workflow.compile()
 
-    print("[OK] HR Pipeline graph compiled successfully.")
-    print("   Nodes: supervisor + 6 worker agents")
-    print("   Flow: supervisor -> agent -> supervisor -> ... -> END")
+    logger.info("HR Pipeline graph compiled successfully.")
+    logger.info("   Nodes: supervisor + 6 worker agents")
+    logger.info("   Flow: supervisor -> agent -> supervisor -> ... -> END")
 
     return compiled

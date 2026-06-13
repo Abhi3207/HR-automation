@@ -166,7 +166,7 @@ def get_pipeline_summary(job_posting_id: int) -> dict:
 
         shortlisted = session.query(Application).filter(
             Application.job_posting_id == job_posting_id,
-            Application.is_shortlisted == True
+            Application.is_shortlisted.is_(True)
         ).count()
 
         offers = session.query(Offer).filter(

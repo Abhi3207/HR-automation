@@ -143,7 +143,7 @@ def get_shortlisted_candidates(job_posting_id: int) -> list[dict]:
     with get_session() as session:
         apps = session.query(Application).filter(
             Application.job_posting_id == job_posting_id,
-            Application.is_shortlisted == True
+            Application.is_shortlisted.is_(True)
         ).all()
         results = []
         for app in apps:

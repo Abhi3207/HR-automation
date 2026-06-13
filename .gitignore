@@ -10,6 +10,7 @@ __pycache__/
 dist/
 build/
 .eggs/
+*.pyc
 
 # Virtual environment
 venv/
@@ -29,3 +30,10 @@ env/
 # OS
 .DS_Store
 Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Gemini
+.gemini/

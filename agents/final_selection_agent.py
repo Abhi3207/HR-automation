@@ -8,14 +8,19 @@ This agent:
 4. Produces offer summaries
 """
 
+import functools
+
 from langchain_openai import ChatOpenAI
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import SystemMessage, HumanMessage
 from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
 
+from config.logging_config import get_logger
 from config.settings import settings
 from state.hr_state import HRState
 from tools.selection_tools import SELECTION_TOOLS
+
+logger = get_logger(__name__)
 
 FINAL_SELECTION_SYSTEM_PROMPT = """You are the Final Selection Agent in an HR recruitment pipeline.
 
@@ -42,8 +47,9 @@ IMPORTANT: Make a decision for EVERY ranked candidate.
 Be decisive but fair. Document your reasoning clearly."""
 
 
+@functools.lru_cache(maxsize=1)
 def build_final_selection_agent():
-    """Build the Final Selection Agent."""
+    """Build and cache the Final Selection Agent."""
 
     llm = ChatOpenAI(
         model=settings.LLM_MODEL,
@@ -81,9 +87,18 @@ def build_final_selection_agent():
 def final_selection_node(state: HRState) -> dict:
     """Execute the Final Selection Agent."""
     agent = build_final_selection_agent()
-    result = agent.invoke(state)
-    return {
-        "messages": result["messages"],
-        "current_stage": "final_selection_complete",
-        "pipeline_status": "completed",
-    }
+    try:
+        result = agent.invoke(state)
+        return {
+            "messages": result["messages"],
+            "current_stage": "final_selection_complete",
+            "pipeline_status": "completed",
+        }
+    except Exception as e:
+        logger.error("Final Selection Agent failed: %s", e, exc_info=True)
+        return {
+            "messages": [HumanMessage(content=f"[Final Selection Agent] Error: {e}")],
+            "current_stage": "final_selection_complete",
+            "pipeline_status": "error",
+            "error_message": str(e),
+        }

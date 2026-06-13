@@ -13,31 +13,63 @@ load_dotenv(PROJECT_ROOT / ".env")
 
 
 class Settings:
-    """Application settings loaded from environment variables."""
+    """Application settings loaded from environment variables.
 
-    # LLM Configuration
-    OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
-    LLM_MODEL: str = os.getenv("LLM_MODEL", "gpt-4o-mini")
-    LLM_TEMPERATURE: float = float(os.getenv("LLM_TEMPERATURE", "0.1"))
+    Values are resolved at instantiation time so that env changes
+    between import and first use are respected.
+    """
 
-    # Database
-    DATABASE_URL: str = os.getenv(
-        "DATABASE_URL",
-        f"sqlite:///{PROJECT_ROOT / 'hr_system.db'}"
-    )
+    def __init__(self) -> None:
+        # LLM Configuration
+        self.OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
+        self.LLM_MODEL: str = os.getenv("LLM_MODEL", "gpt-4o-mini")
+        self.LLM_TEMPERATURE: float = self._parse_float("LLM_TEMPERATURE", 0.1)
 
-    # API Server
-    API_HOST: str = os.getenv("API_HOST", "0.0.0.0")
-    API_PORT: int = int(os.getenv("API_PORT", "8000"))
+        # Database
+        self.DATABASE_URL: str = os.getenv(
+            "DATABASE_URL",
+            f"sqlite:///{PROJECT_ROOT / 'hr_system.db'}",
+        )
 
-    # Agent Configuration
-    RESUME_SHORTLIST_THRESHOLD: int = int(os.getenv("RESUME_SHORTLIST_THRESHOLD", "60"))
-    MAX_INTERVIEWS_PER_CANDIDATE: int = int(os.getenv("MAX_INTERVIEWS_PER_CANDIDATE", "3"))
+        # API Server
+        self.API_HOST: str = os.getenv("API_HOST", "0.0.0.0")
+        self.API_PORT: int = self._parse_int("API_PORT", 8000)
 
-    @classmethod
-    def validate(cls) -> None:
+        # Agent Configuration
+        self.RESUME_SHORTLIST_THRESHOLD: int = self._parse_int(
+            "RESUME_SHORTLIST_THRESHOLD", 60
+        )
+        self.MAX_INTERVIEWS_PER_CANDIDATE: int = self._parse_int(
+            "MAX_INTERVIEWS_PER_CANDIDATE", 3
+        )
+
+    # --- helpers ---------------------------------------------------------
+
+    @staticmethod
+    def _parse_float(key: str, default: float) -> float:
+        raw = os.getenv(key)
+        if raw is None:
+            return default
+        try:
+            return float(raw)
+        except (ValueError, TypeError):
+            return default
+
+    @staticmethod
+    def _parse_int(key: str, default: int) -> int:
+        raw = os.getenv(key)
+        if raw is None:
+            return default
+        try:
+            return int(raw)
+        except (ValueError, TypeError):
+            return default
+
+    # --- validation ------------------------------------------------------
+
+    def validate(self) -> None:
         """Validate that required settings are present."""
-        if not cls.OPENAI_API_KEY or cls.OPENAI_API_KEY == "sk-your-key-here":
+        if not self.OPENAI_API_KEY or self.OPENAI_API_KEY == "sk-your-key-here":
             raise ValueError(
                 "OPENAI_API_KEY is not set. "
                 "Please copy .env.example to .env and add your API key."

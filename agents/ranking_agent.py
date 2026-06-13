@@ -7,14 +7,19 @@ This agent:
 3. Produces final rankings
 """
 
+import functools
+
 from langchain_openai import ChatOpenAI
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import SystemMessage, HumanMessage
 from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
 
+from config.logging_config import get_logger
 from config.settings import settings
 from state.hr_state import HRState
 from tools.ranking_tools import RANKING_TOOLS
+
+logger = get_logger(__name__)
 
 RANKING_SYSTEM_PROMPT = """You are the Candidate Ranking Agent in an HR recruitment pipeline.
 
@@ -44,8 +49,9 @@ IMPORTANT: Calculate scores and save rankings for ALL candidates with applicatio
 Use calculate_composite_score first, then save_ranking with your analysis."""
 
 
+@functools.lru_cache(maxsize=1)
 def build_ranking_agent():
-    """Build the Candidate Ranking Agent."""
+    """Build and cache the Candidate Ranking Agent."""
 
     llm = ChatOpenAI(
         model=settings.LLM_MODEL,
@@ -83,8 +89,16 @@ def build_ranking_agent():
 def ranking_node(state: HRState) -> dict:
     """Execute the Candidate Ranking Agent."""
     agent = build_ranking_agent()
-    result = agent.invoke(state)
-    return {
-        "messages": result["messages"],
-        "current_stage": "candidate_ranking_complete",
-    }
+    try:
+        result = agent.invoke(state)
+        return {
+            "messages": result["messages"],
+            "current_stage": "candidate_ranking_complete",
+        }
+    except Exception as e:
+        logger.error("Candidate Ranking Agent failed: %s", e, exc_info=True)
+        return {
+            "messages": [HumanMessage(content=f"[Candidate Ranking Agent] Error: {e}")],
+            "current_stage": "candidate_ranking_complete",
+            "error_message": str(e),
+        }

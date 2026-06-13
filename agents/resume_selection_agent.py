@@ -8,14 +8,19 @@ This agent:
 4. Shortlists candidates above the threshold
 """
 
+import functools
+
 from langchain_openai import ChatOpenAI
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import SystemMessage, HumanMessage
 from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
 
+from config.logging_config import get_logger
 from config.settings import settings
 from state.hr_state import HRState
 from tools.resume_tools import RESUME_TOOLS
+
+logger = get_logger(__name__)
 
 RESUME_SELECTION_SYSTEM_PROMPT = """You are the Resume Selection Agent in an HR recruitment pipeline.
 
@@ -41,8 +46,9 @@ The screening threshold is {threshold}/100. Be thorough in your evaluation notes
 )
 
 
+@functools.lru_cache(maxsize=1)
 def build_resume_selection_agent():
-    """Build the Resume Selection Agent as a LangGraph sub-graph."""
+    """Build and cache the Resume Selection Agent as a LangGraph sub-graph."""
 
     llm = ChatOpenAI(
         model=settings.LLM_MODEL,
@@ -80,8 +86,16 @@ def build_resume_selection_agent():
 def resume_selection_node(state: HRState) -> dict:
     """Execute the Resume Selection Agent and return updated state."""
     agent = build_resume_selection_agent()
-    result = agent.invoke(state)
-    return {
-        "messages": result["messages"],
-        "current_stage": "resume_selection_complete",
-    }
+    try:
+        result = agent.invoke(state)
+        return {
+            "messages": result["messages"],
+            "current_stage": "resume_selection_complete",
+        }
+    except Exception as e:
+        logger.error("Resume Selection Agent failed: %s", e, exc_info=True)
+        return {
+            "messages": [HumanMessage(content=f"[Resume Selection Agent] Error: {e}")],
+            "current_stage": "resume_selection_complete",
+            "error_message": str(e),
+        }

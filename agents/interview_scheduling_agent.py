@@ -8,14 +8,19 @@ This agent:
 4. Assigns interview types (technical, behavioral, culture fit)
 """
 
+import functools
+
 from langchain_openai import ChatOpenAI
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import SystemMessage, HumanMessage
 from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
 
+from config.logging_config import get_logger
 from config.settings import settings
 from state.hr_state import HRState
 from tools.scheduling_tools import SCHEDULING_TOOLS
+
+logger = get_logger(__name__)
 
 INTERVIEW_SCHEDULING_SYSTEM_PROMPT = """You are the Interview Scheduling Agent in an HR recruitment pipeline.
 
@@ -41,8 +46,9 @@ IMPORTANT: Use the tools to schedule each interview. Schedule for ALL shortliste
 Use list_interviews to verify your scheduled interviews at the end."""
 
 
+@functools.lru_cache(maxsize=1)
 def build_interview_scheduling_agent():
-    """Build the Interview Scheduling Agent."""
+    """Build and cache the Interview Scheduling Agent."""
 
     llm = ChatOpenAI(
         model=settings.LLM_MODEL,
@@ -80,8 +86,16 @@ def build_interview_scheduling_agent():
 def interview_scheduling_node(state: HRState) -> dict:
     """Execute the Interview Scheduling Agent."""
     agent = build_interview_scheduling_agent()
-    result = agent.invoke(state)
-    return {
-        "messages": result["messages"],
-        "current_stage": "interview_scheduling_complete",
-    }
+    try:
+        result = agent.invoke(state)
+        return {
+            "messages": result["messages"],
+            "current_stage": "interview_scheduling_complete",
+        }
+    except Exception as e:
+        logger.error("Interview Scheduling Agent failed: %s", e, exc_info=True)
+        return {
+            "messages": [HumanMessage(content=f"[Interview Scheduling Agent] Error: {e}")],
+            "current_stage": "interview_scheduling_complete",
+            "error_message": str(e),
+        }

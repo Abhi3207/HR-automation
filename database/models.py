@@ -3,10 +3,10 @@ SQLAlchemy models for the HR Multi-Agent System.
 Defines all database entities for the recruitment pipeline.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import (
     Column, Integer, String, Text, Float, DateTime,
-    ForeignKey, Enum, JSON, Boolean, create_engine
+    ForeignKey, Enum, JSON, Boolean
 )
 from sqlalchemy.orm import declarative_base, relationship
 
@@ -27,8 +27,8 @@ class JobPosting(Base):
     location = Column(String(100), nullable=True)
     employment_type = Column(String(50), default="Full-time")
     status = Column(String(20), default="open")  # open, closed, filled
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
     # Relationships
     applications = relationship("Application", back_populates="job_posting")
@@ -63,7 +63,7 @@ class Candidate(Base):
     experience_years = Column(Integer, nullable=True)
     education = Column(String(200), nullable=True)
     status = Column(String(30), default="applied")  # applied, shortlisted, interviewing, ranked, selected, rejected
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     # Relationships
     applications = relationship("Application", back_populates="candidate")
@@ -95,7 +95,7 @@ class Application(Base):
     screening_score = Column(Float, nullable=True)  # 0-100
     screening_notes = Column(Text, nullable=True)
     is_shortlisted = Column(Boolean, default=False)
-    applied_at = Column(DateTime, default=datetime.utcnow)
+    applied_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     # Relationships
     candidate = relationship("Candidate", back_populates="applications")
@@ -130,7 +130,7 @@ class Interview(Base):
     meeting_link = Column(String(500), nullable=True)
     status = Column(String(20), default="scheduled")  # scheduled, completed, cancelled
     notes = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     # Relationships
     candidate = relationship("Candidate", back_populates="interviews")
@@ -164,7 +164,7 @@ class Feedback(Base):
     weaknesses = Column(Text, nullable=True)
     recommendation = Column(String(20), nullable=False)  # strong_hire, hire, maybe, no_hire
     detailed_notes = Column(Text, nullable=True)
-    submitted_at = Column(DateTime, default=datetime.utcnow)
+    submitted_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     # Relationships
     interview = relationship("Interview", back_populates="feedback")
@@ -197,7 +197,7 @@ class Ranking(Base):
     rank = Column(Integer, nullable=True)
     score_breakdown = Column(JSON, nullable=True)  # Detailed scoring breakdown
     analysis = Column(Text, nullable=True)  # LLM-generated analysis
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     # Relationships
     application = relationship("Application", back_populates="rankings")
@@ -227,7 +227,7 @@ class Offer(Base):
     start_date = Column(DateTime, nullable=True)
     justification = Column(Text, nullable=True)  # LLM-generated justification
     offer_letter_summary = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     # Relationships
     candidate = relationship("Candidate", back_populates="offers")

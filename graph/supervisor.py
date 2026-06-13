@@ -6,12 +6,17 @@ worker agent should execute next. It acts as the central router
 in the multi-agent system.
 """
 
+import functools
+
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
 from pydantic import BaseModel, Field
 
+from config.logging_config import get_logger
 from config.settings import settings
-from state.hr_state import HRState, STAGES
+from state.hr_state import HRState
+
+logger = get_logger(__name__)
 
 
 class SupervisorDecision(BaseModel):
@@ -55,8 +60,9 @@ Current stage indicators:
 """
 
 
+@functools.lru_cache(maxsize=1)
 def build_supervisor():
-    """Build the supervisor LLM with structured output."""
+    """Build and cache the supervisor LLM with structured output."""
     llm = ChatOpenAI(
         model=settings.LLM_MODEL,
         temperature=0,
@@ -89,10 +95,10 @@ Determine which agent should run next.
 
     decision = supervisor.invoke(messages)
 
-    print(f"\n{'='*60}")
-    print(f"[SUPERVISOR] DECISION: {decision.next_agent}")
-    print(f"   Reasoning: {decision.reasoning}")
-    print(f"{'='*60}\n")
+    logger.info("=" * 60)
+    logger.info("[SUPERVISOR] DECISION: %s", decision.next_agent)
+    logger.info("   Reasoning: %s", decision.reasoning)
+    logger.info("=" * 60)
 
     return {
         "next_agent": decision.next_agent,

@@ -7,14 +7,19 @@ This agent is built as a LangGraph StateGraph that:
 3. Saves the posting to the database via tools
 """
 
+import functools
+
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
 from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
 
+from config.logging_config import get_logger
 from config.settings import settings
 from state.hr_state import HRState
 from tools.job_tools import JOB_TOOLS
+
+logger = get_logger(__name__)
 
 # System prompt for this agent
 JOB_POSTING_SYSTEM_PROMPT = """You are the Job Posting Agent in an HR recruitment pipeline.
@@ -37,8 +42,9 @@ After creating the posting, confirm the details in your response.
 IMPORTANT: You MUST use the tools to create the job posting. Do not just describe what you would do."""
 
 
+@functools.lru_cache(maxsize=1)
 def build_job_posting_agent():
-    """Build the Job Posting Agent as a LangGraph sub-graph."""
+    """Build and cache the Job Posting Agent as a LangGraph sub-graph."""
 
     llm = ChatOpenAI(
         model=settings.LLM_MODEL,
@@ -80,8 +86,16 @@ def build_job_posting_agent():
 def job_posting_node(state: HRState) -> dict:
     """Execute the Job Posting Agent and return updated state."""
     agent = build_job_posting_agent()
-    result = agent.invoke(state)
-    return {
-        "messages": result["messages"],
-        "current_stage": "job_posting_complete",
-    }
+    try:
+        result = agent.invoke(state)
+        return {
+            "messages": result["messages"],
+            "current_stage": "job_posting_complete",
+        }
+    except Exception as e:
+        logger.error("Job Posting Agent failed: %s", e, exc_info=True)
+        return {
+            "messages": [HumanMessage(content=f"[Job Posting Agent] Error: {e}")],
+            "current_stage": "job_posting_complete",
+            "error_message": str(e),
+        }

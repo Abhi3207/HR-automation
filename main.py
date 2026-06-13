@@ -2,18 +2,25 @@
 HR Multi-Agent Recruitment System — Main Entry Point
 
 Usage:
-    python main.py run     — Run a full pipeline demo with sample data
-    python main.py api     — Start the FastAPI server
-    python main.py ui      — Launch Streamlit dashboard
-    python main.py init    — Initialize the database only
+    python main.py run       — Run a full pipeline demo with sample data
+    python main.py api       — Start the FastAPI server
+    python main.py ui        — Launch Streamlit dashboard
+    python main.py init      — Initialize the database only
+    python main.py reset     — Drop and re-create all database tables
 """
 
+import argparse
+import logging
 import sys
 from pathlib import Path
 
 # Ensure project root is in path
 PROJECT_ROOT = Path(__file__).parent
 sys.path.insert(0, str(PROJECT_ROOT))
+
+from config.logging_config import get_logger, setup_logging
+
+logger = get_logger(__name__)
 
 
 def run_demo():
@@ -25,9 +32,9 @@ def run_demo():
     from langchain_core.messages import HumanMessage
     from graph.pipeline import build_pipeline
 
-    print("=" * 70)
-    print("HR Multi-Agent Recruitment System - Demo Pipeline")
-    print("=" * 70)
+    logger.info("=" * 70)
+    logger.info("HR Multi-Agent Recruitment System - Demo Pipeline")
+    logger.info("=" * 70)
 
     # Initialize database
     init_db()
@@ -111,7 +118,7 @@ def run_demo():
                     education=c_data["education"],
                 )
                 session.add(candidate)
-                print(f"  [+] Added candidate: {c_data['name']}")
+                logger.info("  [+] Added candidate: %s", c_data["name"])
 
     # Build candidate info for the prompt
     candidate_info = "\n\nCandidates who have applied:\n"
@@ -165,58 +172,56 @@ Please proceed through all stages:
         "final_decisions": [],
     }
 
-    print("\n>> Starting pipeline execution...\n")
+    logger.info(">> Starting pipeline execution...")
 
     # Run the pipeline
     try:
         result = pipeline.invoke(initial_state)
 
-        print("\n" + "=" * 70)
-        print("[OK] PIPELINE COMPLETED SUCCESSFULLY!")
-        print("=" * 70)
-        print(f"\nFinal status: {result.get('pipeline_status', 'unknown')}")
-        print(f"Total messages exchanged: {len(result.get('messages', []))}")
+        logger.info("=" * 70)
+        logger.info("[OK] PIPELINE COMPLETED SUCCESSFULLY!")
+        logger.info("=" * 70)
+        logger.info("Final status: %s", result.get("pipeline_status", "unknown"))
+        logger.info("Total messages exchanged: %d", len(result.get("messages", [])))
 
         # Print summary from database
         from database.models import JobPosting, Application, Offer, Ranking
 
         with get_session() as session:
             jobs = session.query(JobPosting).all()
-            print(f"\n[JOBS] Job Postings: {len(jobs)}")
+            logger.info("[JOBS] Job Postings: %d", len(jobs))
             for j in jobs:
-                print(f"   - {j.title} ({j.status})")
+                logger.info("   - %s (%s)", j.title, j.status)
 
             apps = session.query(Application).all()
             shortlisted = [a for a in apps if a.is_shortlisted]
-            print(f"\n[APPS] Applications: {len(apps)} total, {len(shortlisted)} shortlisted")
+            logger.info("[APPS] Applications: %d total, %d shortlisted", len(apps), len(shortlisted))
 
             from database.models import Interview as InterviewModel
             interviews = session.query(InterviewModel).all()
-            print(f"\n[INTERVIEWS] Interviews: {len(interviews)}")
+            logger.info("[INTERVIEWS] Interviews: %d", len(interviews))
 
             from database.models import Feedback as FeedbackModel
             feedback = session.query(FeedbackModel).all()
-            print(f"\n[FEEDBACK] Feedback: {len(feedback)} submissions")
+            logger.info("[FEEDBACK] Feedback: %d submissions", len(feedback))
 
             rankings = session.query(Ranking).order_by(Ranking.rank).all()
-            print(f"\n[RANKINGS] Rankings:")
+            logger.info("[RANKINGS] Rankings:")
             for r in rankings:
                 name = r.application.candidate.name if r.application and r.application.candidate else "Unknown"
-                print(f"   #{r.rank}: {name} - Score: {r.overall_score:.1f}/10")
+                logger.info("   #%d: %s - Score: %.1f/10", r.rank, name, r.overall_score)
 
             offers = session.query(Offer).all()
-            print(f"\n[DECISIONS] Decisions:")
+            logger.info("[DECISIONS] Decisions:")
             for o in offers:
                 name = o.candidate.name if o.candidate else "Unknown"
                 marker = "[OFFER]" if o.decision == "offer" else "[REJECT]" if o.decision == "reject" else "[WAIT]"
-                print(f"   {marker} {name}: {o.decision.upper()}")
+                logger.info("   %s %s: %s", marker, name, o.decision.upper())
                 if o.justification:
-                    print(f"      Reason: {o.justification[:100]}...")
+                    logger.info("      Reason: %s...", o.justification[:100])
 
     except Exception as e:
-        print(f"\n[ERROR] Pipeline failed: {str(e)}")
-        import traceback
-        traceback.print_exc()
+        logger.error("Pipeline failed: %s", e, exc_info=True)
         sys.exit(1)
 
 
@@ -241,29 +246,48 @@ def init_database():
     """Initialize the database tables."""
     from database.db import init_db
     init_db()
-    print("Database initialized. Tables created.")
+    logger.info("Database initialized. Tables created.")
+
+
+def reset_database():
+    """Drop all tables and re-create them."""
+    from database.db import drop_db, init_db
+    drop_db()
+    init_db()
+    logger.info("Database reset complete.")
 
 
 def main():
-    if len(sys.argv) < 2:
-        print(__doc__)
-        print("\nAvailable commands: run, api, ui, init")
-        sys.exit(0)
+    parser = argparse.ArgumentParser(
+        prog="hr-multi-agent",
+        description="HR Multi-Agent Recruitment System — powered by LangGraph",
+    )
+    parser.add_argument(
+        "command",
+        choices=["run", "api", "ui", "init", "reset"],
+        help="Command to execute",
+    )
+    parser.add_argument(
+        "-v", "--verbose",
+        action="store_true",
+        help="Enable verbose (DEBUG) logging",
+    )
 
-    command = sys.argv[1].lower()
+    args = parser.parse_args()
 
-    if command == "run":
-        run_demo()
-    elif command == "api":
-        run_api()
-    elif command == "ui":
-        run_ui()
-    elif command == "init":
-        init_database()
-    else:
-        print(f"Unknown command: {command}")
-        print("Available commands: run, api, ui, init")
-        sys.exit(1)
+    # Apply verbose logging if requested
+    if args.verbose:
+        logging.getLogger().setLevel(logging.DEBUG)
+
+    commands = {
+        "run": run_demo,
+        "api": run_api,
+        "ui": run_ui,
+        "init": init_database,
+        "reset": reset_database,
+    }
+
+    commands[args.command]()
 
 
 if __name__ == "__main__":

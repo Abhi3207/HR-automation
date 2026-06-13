@@ -8,14 +8,19 @@ This agent:
 4. Validates completeness of feedback
 """
 
+import functools
+
 from langchain_openai import ChatOpenAI
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import SystemMessage, HumanMessage
 from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
 
+from config.logging_config import get_logger
 from config.settings import settings
 from state.hr_state import HRState
 from tools.feedback_tools import FEEDBACK_TOOLS
+
+logger = get_logger(__name__)
 
 FEEDBACK_COLLECTION_SYSTEM_PROMPT = """You are the Feedback Collection Agent in an HR recruitment pipeline.
 
@@ -47,8 +52,9 @@ IMPORTANT: Submit feedback for ALL scheduled interviews using the submit_feedbac
 First use get_pending_feedback or list interviews to find all interviews needing feedback."""
 
 
+@functools.lru_cache(maxsize=1)
 def build_feedback_agent():
-    """Build the Feedback Collection Agent."""
+    """Build and cache the Feedback Collection Agent."""
 
     llm = ChatOpenAI(
         model=settings.LLM_MODEL,
@@ -86,8 +92,16 @@ def build_feedback_agent():
 def feedback_node(state: HRState) -> dict:
     """Execute the Feedback Collection Agent."""
     agent = build_feedback_agent()
-    result = agent.invoke(state)
-    return {
-        "messages": result["messages"],
-        "current_stage": "feedback_collection_complete",
-    }
+    try:
+        result = agent.invoke(state)
+        return {
+            "messages": result["messages"],
+            "current_stage": "feedback_collection_complete",
+        }
+    except Exception as e:
+        logger.error("Feedback Collection Agent failed: %s", e, exc_info=True)
+        return {
+            "messages": [HumanMessage(content=f"[Feedback Collection Agent] Error: {e}")],
+            "current_stage": "feedback_collection_complete",
+            "error_message": str(e),
+        }

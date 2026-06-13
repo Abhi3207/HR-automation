@@ -5,22 +5,40 @@ Provides REST endpoints to interact with the pipeline,
 manage job postings, candidates, and view results.
 """
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import Optional
 import uvicorn
 
+from config.logging_config import get_logger
 from database.db import init_db, get_session
 from database.models import (
     JobPosting, Candidate, Application, Interview,
     Feedback, Ranking, Offer
 )
 
+logger = get_logger(__name__)
+
+
+# --- Lifespan (replaces deprecated @app.on_event) ---
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application lifespan: runs startup logic before yield, shutdown after."""
+    init_db()
+    logger.info("FastAPI server started — database initialized")
+    yield
+    logger.info("FastAPI server shutting down")
+
+
 app = FastAPI(
     title="HR Multi-Agent Recruitment System",
     description="Automated HR recruitment pipeline powered by LangGraph agents",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -63,11 +81,12 @@ class FeedbackInput(BaseModel):
     weaknesses: str = ""
 
 
-# --- Startup ---
+# --- Health Check ---
 
-@app.on_event("startup")
-def startup():
-    init_db()
+@app.get("/health", tags=["System"])
+async def health_check():
+    """Health check endpoint."""
+    return {"status": "healthy", "version": "1.0.0"}
 
 
 # --- Pipeline Endpoints ---
@@ -151,6 +170,7 @@ Please proceed through all stages of the pipeline:
         }
 
     except Exception as e:
+        logger.error("Pipeline failed: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -284,7 +304,7 @@ async def pipeline_summary(job_id: int):
 
         shortlisted = session.query(Application).filter(
             Application.job_posting_id == job_id,
-            Application.is_shortlisted == True
+            Application.is_shortlisted.is_(True)
         ).count()
 
         interviews_count = session.query(Interview).join(
