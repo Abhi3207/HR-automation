@@ -25,6 +25,9 @@ class HRState(TypedDict):
     next_agent: str             # Supervisor's routing decision
     pipeline_status: str        # "running", "completed", "error"
     error_message: Optional[str]  # Error details if pipeline fails
+    retry_count: int                # Current retry attempt for the active stage
+    max_retries: int                # Maximum retries per stage (default: 2)
+    failed_stages: list[str]        # Stages that failed after all retries
 
     # --- Job Posting Data ---
     job_posting_id: Optional[int]
@@ -45,6 +48,9 @@ class HRState(TypedDict):
 
     # --- Final Decisions ---
     final_decisions: list[dict]         # Offer/reject decisions
+
+    # --- Observability ---
+    stage_metrics: list[dict]           # Per-stage timing, token counts, status
 
 
 # Stage constants for routing

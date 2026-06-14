@@ -43,6 +43,17 @@ class Settings:
             "MAX_INTERVIEWS_PER_CANDIDATE", 3
         )
 
+        # Agent Guardrails
+        self.AGENT_RECURSION_LIMIT: int = self._parse_int(
+            "AGENT_RECURSION_LIMIT", 25
+        )
+        self.AGENT_TIMEOUT_SECONDS: int = self._parse_int(
+            "AGENT_TIMEOUT_SECONDS", 120
+        )
+        self.AGENT_MAX_RETRIES: int = self._parse_int(
+            "AGENT_MAX_RETRIES", 2
+        )
+
     # --- helpers ---------------------------------------------------------
 
     @staticmethod

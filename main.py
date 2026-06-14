@@ -162,6 +162,9 @@ Please proceed through all stages:
         "next_agent": "",
         "pipeline_status": "running",
         "error_message": None,
+        "retry_count": 0,
+        "max_retries": settings.AGENT_MAX_RETRIES,
+        "failed_stages": [],
         "job_posting_id": None,
         "job_posting": None,
         "candidates": sample_candidates,
@@ -170,6 +173,7 @@ Please proceed through all stages:
         "interview_feedback": [],
         "candidate_rankings": [],
         "final_decisions": [],
+        "stage_metrics": [],
     }
 
     logger.info(">> Starting pipeline execution...")
@@ -183,6 +187,21 @@ Please proceed through all stages:
         logger.info("=" * 70)
         logger.info("Final status: %s", result.get("pipeline_status", "unknown"))
         logger.info("Total messages exchanged: %d", len(result.get("messages", [])))
+
+        # Log stage metrics
+        stage_metrics = result.get("stage_metrics", [])
+        if stage_metrics:
+            logger.info("[METRICS] Per-stage performance:")
+            for m in stage_metrics:
+                logger.info(
+                    "   %s — %.1fs | %s | %d tool calls",
+                    m.get("stage", "?"), m.get("elapsed_seconds", 0),
+                    m.get("status", "?"), m.get("tool_calls", 0),
+                )
+
+        failed = result.get("failed_stages", [])
+        if failed:
+            logger.warning("[WARNING] Failed stages: %s", ", ".join(failed))
 
         # Print summary from database
         from database.models import JobPosting, Application, Offer, Ranking

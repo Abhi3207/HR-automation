@@ -16,6 +16,7 @@ from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
 
 from config.logging_config import get_logger
+from config.metrics import StageTimer
 from config.settings import settings
 from state.hr_state import HRState
 from tools.scheduling_tools import SCHEDULING_TOOLS
@@ -80,22 +81,38 @@ def build_interview_scheduling_agent():
     )
     workflow.add_edge("tools", "agent")
 
-    return workflow.compile()
+    return workflow.compile(
+        recursion_limit=settings.AGENT_RECURSION_LIMIT,
+    )
 
 
 def interview_scheduling_node(state: HRState) -> dict:
     """Execute the Interview Scheduling Agent."""
     agent = build_interview_scheduling_agent()
-    try:
-        result = agent.invoke(state)
-        return {
-            "messages": result["messages"],
-            "current_stage": "interview_scheduling_complete",
-        }
-    except Exception as e:
-        logger.error("Interview Scheduling Agent failed: %s", e, exc_info=True)
-        return {
-            "messages": [HumanMessage(content=f"[Interview Scheduling Agent] Error: {e}")],
-            "current_stage": "interview_scheduling_complete",
-            "error_message": str(e),
-        }
+    metrics_list: list = list(state.get("stage_metrics", []))
+
+    with StageTimer("interview_scheduling") as timer:
+        try:
+            result = agent.invoke(state)
+            timer.count_tool_calls(result.get("messages", []))
+            timer.mark_success()
+
+            logger.info("[Interview Scheduling Agent] Completed successfully (%.1fs)", timer.elapsed_seconds)
+
+            metrics_list.append(timer.to_dict())
+            return {
+                "messages": result["messages"],
+                "current_stage": "interview_scheduling_complete",
+                "stage_metrics": metrics_list,
+            }
+        except Exception as e:
+            logger.error("Interview Scheduling Agent failed: %s", e, exc_info=True)
+            timer.mark_failure(str(e))
+            metrics_list.append(timer.to_dict())
+            return {
+                "messages": [HumanMessage(content=f"[Interview Scheduling Agent] Error: {e}")],
+                "current_stage": "interview_scheduling",
+                "pipeline_status": "running",
+                "error_message": str(e),
+                "stage_metrics": metrics_list,
+            }

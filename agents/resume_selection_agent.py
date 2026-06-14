@@ -16,6 +16,7 @@ from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
 
 from config.logging_config import get_logger
+from config.metrics import StageTimer
 from config.settings import settings
 from state.hr_state import HRState
 from tools.resume_tools import RESUME_TOOLS
@@ -80,22 +81,38 @@ def build_resume_selection_agent():
     )
     workflow.add_edge("tools", "agent")
 
-    return workflow.compile()
+    return workflow.compile(
+        recursion_limit=settings.AGENT_RECURSION_LIMIT,
+    )
 
 
 def resume_selection_node(state: HRState) -> dict:
     """Execute the Resume Selection Agent and return updated state."""
     agent = build_resume_selection_agent()
-    try:
-        result = agent.invoke(state)
-        return {
-            "messages": result["messages"],
-            "current_stage": "resume_selection_complete",
-        }
-    except Exception as e:
-        logger.error("Resume Selection Agent failed: %s", e, exc_info=True)
-        return {
-            "messages": [HumanMessage(content=f"[Resume Selection Agent] Error: {e}")],
-            "current_stage": "resume_selection_complete",
-            "error_message": str(e),
-        }
+    metrics_list: list = list(state.get("stage_metrics", []))
+
+    with StageTimer("resume_selection") as timer:
+        try:
+            result = agent.invoke(state)
+            timer.count_tool_calls(result.get("messages", []))
+            timer.mark_success()
+
+            logger.info("[Resume Selection Agent] Completed successfully (%.1fs)", timer.elapsed_seconds)
+
+            metrics_list.append(timer.to_dict())
+            return {
+                "messages": result["messages"],
+                "current_stage": "resume_selection_complete",
+                "stage_metrics": metrics_list,
+            }
+        except Exception as e:
+            logger.error("Resume Selection Agent failed: %s", e, exc_info=True)
+            timer.mark_failure(str(e))
+            metrics_list.append(timer.to_dict())
+            return {
+                "messages": [HumanMessage(content=f"[Resume Selection Agent] Error: {e}")],
+                "current_stage": "resume_selection",
+                "pipeline_status": "running",
+                "error_message": str(e),
+                "stage_metrics": metrics_list,
+            }

@@ -16,6 +16,7 @@ from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
 
 from config.logging_config import get_logger
+from config.metrics import StageTimer
 from config.settings import settings
 from state.hr_state import HRState
 from tools.feedback_tools import FEEDBACK_TOOLS
@@ -86,22 +87,38 @@ def build_feedback_agent():
     )
     workflow.add_edge("tools", "agent")
 
-    return workflow.compile()
+    return workflow.compile(
+        recursion_limit=settings.AGENT_RECURSION_LIMIT,
+    )
 
 
 def feedback_node(state: HRState) -> dict:
     """Execute the Feedback Collection Agent."""
     agent = build_feedback_agent()
-    try:
-        result = agent.invoke(state)
-        return {
-            "messages": result["messages"],
-            "current_stage": "feedback_collection_complete",
-        }
-    except Exception as e:
-        logger.error("Feedback Collection Agent failed: %s", e, exc_info=True)
-        return {
-            "messages": [HumanMessage(content=f"[Feedback Collection Agent] Error: {e}")],
-            "current_stage": "feedback_collection_complete",
-            "error_message": str(e),
-        }
+    metrics_list: list = list(state.get("stage_metrics", []))
+
+    with StageTimer("feedback_collection") as timer:
+        try:
+            result = agent.invoke(state)
+            timer.count_tool_calls(result.get("messages", []))
+            timer.mark_success()
+
+            logger.info("[Feedback Collection Agent] Completed successfully (%.1fs)", timer.elapsed_seconds)
+
+            metrics_list.append(timer.to_dict())
+            return {
+                "messages": result["messages"],
+                "current_stage": "feedback_collection_complete",
+                "stage_metrics": metrics_list,
+            }
+        except Exception as e:
+            logger.error("Feedback Collection Agent failed: %s", e, exc_info=True)
+            timer.mark_failure(str(e))
+            metrics_list.append(timer.to_dict())
+            return {
+                "messages": [HumanMessage(content=f"[Feedback Collection Agent] Error: {e}")],
+                "current_stage": "feedback_collection",
+                "pipeline_status": "running",
+                "error_message": str(e),
+                "stage_metrics": metrics_list,
+            }

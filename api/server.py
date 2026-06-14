@@ -3,24 +3,39 @@ FastAPI server for the HR Multi-Agent System.
 
 Provides REST endpoints to interact with the pipeline,
 manage job postings, candidates, and view results.
+
+Pipeline execution is asynchronous — a POST to /pipeline/start
+returns a run_id immediately, and the caller can poll status
+via GET /pipeline/status/{run_id}.
 """
 
+import threading
+import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
-from typing import Optional
 import uvicorn
 
 from config.logging_config import get_logger
+from config.settings import settings
 from database.db import init_db, get_session
 from database.models import (
     JobPosting, Candidate, Application, Interview,
     Feedback, Ranking, Offer
 )
+from api.schemas import (
+    PipelineStartRequest, CandidateInput, FeedbackInput,
+    PipelineRunResponse, PipelineStatusResponse,
+)
 
 logger = get_logger(__name__)
+
+# --- In-memory pipeline run tracker ---
+# {run_id: {status, current_stage, started_at, completed_at, error, total_messages, stage_metrics}}
+_pipeline_runs: dict[str, dict] = {}
+_runs_lock = threading.Lock()
 
 
 # --- Lifespan (replaces deprecated @app.on_event) ---
@@ -37,7 +52,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="HR Multi-Agent Recruitment System",
     description="Automated HR recruitment pipeline powered by LangGraph agents",
-    version="1.0.0",
+    version="2.0.0",
     lifespan=lifespan,
 )
 
@@ -50,52 +65,15 @@ app.add_middleware(
 )
 
 
-# --- Request/Response Models ---
+# --- Pipeline background runner ---
 
-class PipelineStartRequest(BaseModel):
-    job_title: str = Field(..., description="Title of the job to hire for")
-    department: str = Field(default="Engineering")
-    requirements: str = Field(..., description="Job requirements")
-    candidates: list[dict] = Field(default=[], description="List of candidate dicts with name, email, resume_text")
-
-
-class CandidateInput(BaseModel):
-    name: str
-    email: str
-    resume_text: str
-    phone: str = ""
-    skills: str = ""
-    experience_years: int = 0
-    education: str = ""
-
-
-class FeedbackInput(BaseModel):
-    interview_id: int
-    interviewer_name: str
-    overall_rating: float
-    recommendation: str
-    technical_rating: int = 0
-    communication_rating: int = 0
-    culture_fit_rating: int = 0
-    strengths: str = ""
-    weaknesses: str = ""
-
-
-# --- Health Check ---
-
-@app.get("/health", tags=["System"])
-async def health_check():
-    """Health check endpoint."""
-    return {"status": "healthy", "version": "1.0.0"}
-
-
-# --- Pipeline Endpoints ---
-
-@app.post("/pipeline/start", tags=["Pipeline"])
-async def start_pipeline(request: PipelineStartRequest):
-    """Start a new hiring pipeline. Runs all 6 agents sequentially."""
+def _run_pipeline_background(run_id: str, request: PipelineStartRequest):
+    """Execute the full pipeline in a background thread."""
     from langchain_core.messages import HumanMessage
     from graph.pipeline import build_pipeline
+
+    with _runs_lock:
+        _pipeline_runs[run_id]["status"] = "running"
 
     try:
         pipeline = build_pipeline()
@@ -130,6 +108,9 @@ Please proceed through all stages of the pipeline:
             "next_agent": "",
             "pipeline_status": "running",
             "error_message": None,
+            "retry_count": 0,
+            "max_retries": settings.AGENT_MAX_RETRIES,
+            "failed_stages": [],
             "job_posting_id": None,
             "job_posting": None,
             "candidates": request.candidates,
@@ -138,6 +119,7 @@ Please proceed through all stages of the pipeline:
             "interview_feedback": [],
             "candidate_rankings": [],
             "final_decisions": [],
+            "stage_metrics": [],
         }
 
         # Add candidates to DB first
@@ -161,17 +143,150 @@ Please proceed through all stages of the pipeline:
         # Run the pipeline
         result = pipeline.invoke(initial_state)
 
-        return {
-            "status": "completed",
-            "pipeline_status": result.get("pipeline_status", "completed"),
-            "current_stage": result.get("current_stage", "complete"),
-            "message": "Pipeline completed successfully!",
-            "total_messages": len(result.get("messages", [])),
-        }
+        with _runs_lock:
+            _pipeline_runs[run_id].update({
+                "status": result.get("pipeline_status", "completed"),
+                "current_stage": result.get("current_stage", "complete"),
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+                "total_messages": len(result.get("messages", [])),
+                "stage_metrics": result.get("stage_metrics", []),
+                "failed_stages": result.get("failed_stages", []),
+            })
+
+        logger.info("Pipeline run %s completed successfully", run_id)
 
     except Exception as e:
-        logger.error("Pipeline failed: %s", e, exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Pipeline run %s failed: %s", run_id, e, exc_info=True)
+        with _runs_lock:
+            _pipeline_runs[run_id].update({
+                "status": "error",
+                "error": str(e),
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            })
+
+
+# --- Health Check ---
+
+@app.get("/health", tags=["System"])
+async def health_check():
+    """Health check endpoint."""
+    return {"status": "healthy", "version": "2.0.0"}
+
+
+# --- Pipeline Endpoints ---
+
+@app.post("/pipeline/start", tags=["Pipeline"], response_model=PipelineRunResponse)
+async def start_pipeline(request: PipelineStartRequest, background_tasks: BackgroundTasks):
+    """Start a new hiring pipeline asynchronously.
+
+    Returns a run_id immediately. Poll GET /pipeline/status/{run_id} for progress.
+    """
+    run_id = str(uuid.uuid4())[:8]
+
+    with _runs_lock:
+        _pipeline_runs[run_id] = {
+            "status": "started",
+            "current_stage": "start",
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "completed_at": None,
+            "error": None,
+            "total_messages": 0,
+            "stage_metrics": [],
+            "failed_stages": [],
+        }
+
+    background_tasks.add_task(_run_pipeline_background, run_id, request)
+
+    logger.info("Pipeline run %s queued", run_id)
+    return PipelineRunResponse(
+        run_id=run_id,
+        status="started",
+        message="Pipeline started in background. Poll /pipeline/status/{run_id} for progress.",
+    )
+
+
+@app.get("/pipeline/status/{run_id}", tags=["Pipeline"], response_model=PipelineStatusResponse)
+async def pipeline_status(run_id: str):
+    """Check the status of a pipeline run."""
+    with _runs_lock:
+        run = _pipeline_runs.get(run_id)
+
+    if not run:
+        raise HTTPException(status_code=404, detail=f"Pipeline run '{run_id}' not found")
+
+    return PipelineStatusResponse(
+        run_id=run_id,
+        status=run["status"],
+        current_stage=run.get("current_stage"),
+        started_at=run.get("started_at"),
+        completed_at=run.get("completed_at"),
+        error=run.get("error"),
+        total_messages=run.get("total_messages"),
+        stage_metrics=run.get("stage_metrics"),
+    )
+
+
+@app.get("/pipeline/metrics/{run_id}", tags=["Pipeline"])
+async def pipeline_metrics(run_id: str):
+    """Get per-stage metrics for a pipeline run."""
+    with _runs_lock:
+        run = _pipeline_runs.get(run_id)
+
+    if not run:
+        raise HTTPException(status_code=404, detail=f"Pipeline run '{run_id}' not found")
+
+    return {
+        "run_id": run_id,
+        "status": run["status"],
+        "stage_metrics": run.get("stage_metrics", []),
+        "failed_stages": run.get("failed_stages", []),
+    }
+
+
+@app.get("/pipeline/runs", tags=["Pipeline"])
+async def list_pipeline_runs():
+    """List all pipeline runs (in-memory)."""
+    with _runs_lock:
+        return [
+            {"run_id": rid, "status": data["status"], "started_at": data.get("started_at")}
+            for rid, data in _pipeline_runs.items()
+        ]
+
+
+# --- Pipeline Summary (DB-based) ---
+
+@app.get("/pipeline/summary/{job_id}", tags=["Pipeline"])
+async def pipeline_summary(job_id: int):
+    """Get a complete pipeline summary for a job posting."""
+    with get_session() as session:
+        job = session.query(JobPosting).filter(JobPosting.id == job_id).first()
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+
+        total_apps = session.query(Application).filter(
+            Application.job_posting_id == job_id
+        ).count()
+
+        shortlisted = session.query(Application).filter(
+            Application.job_posting_id == job_id,
+            Application.is_shortlisted.is_(True)
+        ).count()
+
+        interviews_count = session.query(Interview).join(
+            Application, Interview.candidate_id == Application.candidate_id
+        ).filter(Application.job_posting_id == job_id).count()
+
+        offers = session.query(Offer).filter(
+            Offer.job_posting_id == job_id, Offer.decision == "offer"
+        ).count()
+
+        return {
+            "job": job.to_dict(),
+            "total_applicants": total_apps,
+            "shortlisted": shortlisted,
+            "interviews_conducted": interviews_count,
+            "offers_made": offers,
+        }
 
 
 # --- Job Posting Endpoints ---
@@ -288,45 +403,8 @@ async def list_decisions():
         return [o.to_dict() for o in offers]
 
 
-# --- Pipeline Summary ---
-
-@app.get("/pipeline/summary/{job_id}", tags=["Pipeline"])
-async def pipeline_summary(job_id: int):
-    """Get a complete pipeline summary for a job posting."""
-    with get_session() as session:
-        job = session.query(JobPosting).filter(JobPosting.id == job_id).first()
-        if not job:
-            raise HTTPException(status_code=404, detail="Job not found")
-
-        total_apps = session.query(Application).filter(
-            Application.job_posting_id == job_id
-        ).count()
-
-        shortlisted = session.query(Application).filter(
-            Application.job_posting_id == job_id,
-            Application.is_shortlisted.is_(True)
-        ).count()
-
-        interviews_count = session.query(Interview).join(
-            Application, Interview.candidate_id == Application.candidate_id
-        ).filter(Application.job_posting_id == job_id).count()
-
-        offers = session.query(Offer).filter(
-            Offer.job_posting_id == job_id, Offer.decision == "offer"
-        ).count()
-
-        return {
-            "job": job.to_dict(),
-            "total_applicants": total_apps,
-            "shortlisted": shortlisted,
-            "interviews_conducted": interviews_count,
-            "offers_made": offers,
-        }
-
-
 def run_server():
     """Start the FastAPI server."""
-    from config.settings import settings
     uvicorn.run(
         "api.server:app",
         host=settings.API_HOST,

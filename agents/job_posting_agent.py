@@ -15,6 +15,7 @@ from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
 
 from config.logging_config import get_logger
+from config.metrics import StageTimer
 from config.settings import settings
 from state.hr_state import HRState
 from tools.job_tools import JOB_TOOLS
@@ -79,23 +80,39 @@ def build_job_posting_agent():
     )
     workflow.add_edge("tools", "agent")
 
-    return workflow.compile()
+    return workflow.compile(
+        recursion_limit=settings.AGENT_RECURSION_LIMIT,
+    )
 
 
 # Wrapper function for use as a node in the main pipeline
 def job_posting_node(state: HRState) -> dict:
     """Execute the Job Posting Agent and return updated state."""
     agent = build_job_posting_agent()
-    try:
-        result = agent.invoke(state)
-        return {
-            "messages": result["messages"],
-            "current_stage": "job_posting_complete",
-        }
-    except Exception as e:
-        logger.error("Job Posting Agent failed: %s", e, exc_info=True)
-        return {
-            "messages": [HumanMessage(content=f"[Job Posting Agent] Error: {e}")],
-            "current_stage": "job_posting_complete",
-            "error_message": str(e),
-        }
+    metrics_list: list = list(state.get("stage_metrics", []))
+
+    with StageTimer("job_posting") as timer:
+        try:
+            result = agent.invoke(state)
+            timer.count_tool_calls(result.get("messages", []))
+            timer.mark_success()
+
+            logger.info("[Job Posting Agent] Completed successfully (%.1fs)", timer.elapsed_seconds)
+
+            metrics_list.append(timer.to_dict())
+            return {
+                "messages": result["messages"],
+                "current_stage": "job_posting_complete",
+                "stage_metrics": metrics_list,
+            }
+        except Exception as e:
+            logger.error("Job Posting Agent failed: %s", e, exc_info=True)
+            timer.mark_failure(str(e))
+            metrics_list.append(timer.to_dict())
+            return {
+                "messages": [HumanMessage(content=f"[Job Posting Agent] Error: {e}")],
+                "current_stage": "job_posting",
+                "pipeline_status": "running",
+                "error_message": str(e),
+                "stage_metrics": metrics_list,
+            }

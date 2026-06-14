@@ -16,6 +16,7 @@ from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
 
 from config.logging_config import get_logger
+from config.metrics import StageTimer
 from config.settings import settings
 from state.hr_state import HRState
 from tools.selection_tools import SELECTION_TOOLS
@@ -81,24 +82,39 @@ def build_final_selection_agent():
     )
     workflow.add_edge("tools", "agent")
 
-    return workflow.compile()
+    return workflow.compile(
+        recursion_limit=settings.AGENT_RECURSION_LIMIT,
+    )
 
 
 def final_selection_node(state: HRState) -> dict:
     """Execute the Final Selection Agent."""
     agent = build_final_selection_agent()
-    try:
-        result = agent.invoke(state)
-        return {
-            "messages": result["messages"],
-            "current_stage": "final_selection_complete",
-            "pipeline_status": "completed",
-        }
-    except Exception as e:
-        logger.error("Final Selection Agent failed: %s", e, exc_info=True)
-        return {
-            "messages": [HumanMessage(content=f"[Final Selection Agent] Error: {e}")],
-            "current_stage": "final_selection_complete",
-            "pipeline_status": "error",
-            "error_message": str(e),
-        }
+    metrics_list: list = list(state.get("stage_metrics", []))
+
+    with StageTimer("final_selection") as timer:
+        try:
+            result = agent.invoke(state)
+            timer.count_tool_calls(result.get("messages", []))
+            timer.mark_success()
+
+            logger.info("[Final Selection Agent] Completed successfully (%.1fs)", timer.elapsed_seconds)
+
+            metrics_list.append(timer.to_dict())
+            return {
+                "messages": result["messages"],
+                "current_stage": "final_selection_complete",
+                "pipeline_status": "completed",
+                "stage_metrics": metrics_list,
+            }
+        except Exception as e:
+            logger.error("Final Selection Agent failed: %s", e, exc_info=True)
+            timer.mark_failure(str(e))
+            metrics_list.append(timer.to_dict())
+            return {
+                "messages": [HumanMessage(content=f"[Final Selection Agent] Error: {e}")],
+                "current_stage": "final_selection",
+                "pipeline_status": "running",
+                "error_message": str(e),
+                "stage_metrics": metrics_list,
+            }
