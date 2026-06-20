@@ -25,6 +25,14 @@ Supervisor → Job Posting → Resume Screening → Interview Scheduling
 | 🏆 **Candidate Ranking** | Ranks candidates using composite scoring |
 | ✅ **Final Selection** | Makes hire/reject decisions |
 
+## Key Features
+
+- **Retry & resilience** — Supervisor auto-retries failed stages (configurable, default 2 retries) before skipping
+- **Recursion limits** — Each agent sub-graph has a configurable recursion limit (default 25) to prevent runaway loops
+- **Async pipeline API** — `POST /pipeline/start` returns a `run_id` immediately; poll status via `/pipeline/status/{run_id}`
+- **Per-stage observability** — Stage timing, tool-call counts, and success/failure tracked automatically
+- **Enhanced dashboard** — Pipeline progress bar, candidate comparison charts, CSV export
+
 ## Project Structure
 
 ```
@@ -43,7 +51,7 @@ hr-multi-agent-system/
 │
 ├── graph/                   # Pipeline orchestration
 │   ├── pipeline.py          # StateGraph assembly
-│   └── supervisor.py        # Supervisor routing logic
+│   └── supervisor.py        # Supervisor routing + retry logic
 │
 ├── tools/                   # LangChain tools (DB operations)
 │   ├── job_tools.py
@@ -58,17 +66,19 @@ hr-multi-agent-system/
 │
 ├── config/
 │   ├── settings.py          # Environment-based configuration
-│   └── logging_config.py    # Centralized logging
+│   ├── logging_config.py    # Centralized logging
+│   └── metrics.py           # StageTimer & observability utilities
 │
 ├── database/
 │   ├── db.py                # SQLAlchemy engine & session management
 │   └── models.py            # ORM models (7 tables)
 │
 ├── api/
-│   └── server.py            # FastAPI REST server
+│   ├── server.py            # FastAPI REST server (async pipeline)
+│   └── schemas.py           # Pydantic request/response models
 │
 └── ui/
-    └── dashboard.py         # Streamlit dashboard
+    └── dashboard.py         # Streamlit dashboard (enhanced)
 ```
 
 ## Quick Start
@@ -115,8 +125,11 @@ python main.py run --verbose
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/health` | Health check |
-| `POST` | `/pipeline/start` | Start a full hiring pipeline |
-| `GET` | `/pipeline/summary/{job_id}` | Pipeline summary for a job |
+| `POST` | `/pipeline/start` | Start a pipeline (async, returns run_id) |
+| `GET` | `/pipeline/status/{run_id}` | Check pipeline run status |
+| `GET` | `/pipeline/metrics/{run_id}` | Per-stage metrics for a run |
+| `GET` | `/pipeline/runs` | List all pipeline runs |
+| `GET` | `/pipeline/summary/{job_id}` | DB-based summary for a job |
 | `GET` | `/jobs` | List all job postings |
 | `GET` | `/jobs/{job_id}` | Get a specific job posting |
 | `GET` | `/candidates` | List all candidates |
@@ -126,6 +139,19 @@ python main.py run --verbose
 | `POST` | `/feedback` | Submit interviewer feedback |
 | `GET` | `/rankings` | List candidate rankings |
 | `GET` | `/decisions` | List hiring decisions |
+
+## Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `OPENAI_API_KEY` | — | Required. Your OpenAI API key |
+| `LLM_MODEL` | `gpt-4o-mini` | LLM model to use |
+| `LLM_TEMPERATURE` | `0.1` | LLM temperature |
+| `DATABASE_URL` | `sqlite:///./hr_system.db` | Database connection string |
+| `RESUME_SHORTLIST_THRESHOLD` | `60` | Minimum score to shortlist (0–100) |
+| `AGENT_RECURSION_LIMIT` | `25` | Max LLM↔tool loops per agent |
+| `AGENT_TIMEOUT_SECONDS` | `120` | Max wall-clock time per agent |
+| `AGENT_MAX_RETRIES` | `2` | Retries before skipping a failed stage |
 
 ## Tech Stack
 
@@ -140,7 +166,9 @@ python main.py run --verbose
 - [ ] Implement A2A (Agent-to-Agent) protocol
 - [ ] Make each agent an independent service
 - [ ] Support one-ask to multiple-agent flows
-- [ ] **Major:** Evaluation framework — step-level metrics, automated production monitoring
+- [x] ~~Evaluation framework — step-level metrics~~ (v2.0)
+- [ ] Automated production monitoring & alerting
+- [ ] Persistent pipeline run storage (currently in-memory)
 
 ## Contributing
 

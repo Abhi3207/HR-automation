@@ -2,12 +2,17 @@
 Streamlit Dashboard for the HR Multi-Agent Recruitment System.
 
 Provides a visual interface to:
-- View pipeline progress
+- View pipeline progress with stage-level status
 - Manage job postings and candidates
 - Review interviews, feedback, rankings, and decisions
+- Compare top candidates side-by-side
+- Export data as CSV
 - Start new pipelines
 """
 
+import io
+
+import pandas as pd
 import streamlit as st
 import sys
 from pathlib import Path
@@ -58,11 +63,77 @@ st.markdown("""
     .badge-blue { background: #cce5ff; color: #004085; }
     .badge-yellow { background: #fff3cd; color: #856404; }
     .badge-red { background: #f8d7da; color: #721c24; }
+    .badge-grey { background: #e2e3e5; color: #383d41; }
+
+    /* Stage progress bar */
+    .stage-progress {
+        display: flex;
+        gap: 8px;
+        margin: 1rem 0;
+    }
+    .stage-pill {
+        flex: 1;
+        text-align: center;
+        padding: 10px 8px;
+        border-radius: 10px;
+        font-size: 0.8rem;
+        font-weight: 600;
+        transition: all 0.3s ease;
+    }
+    .stage-done { background: #28a745; color: white; }
+    .stage-pending { background: #e9ecef; color: #6c757d; }
 </style>
 """, unsafe_allow_html=True)
 
 # Initialize database
 init_db()
+
+
+# --- Helper: detect completed stages from DB ---
+def _get_completed_stages() -> set[str]:
+    """Inspect the database to determine which pipeline stages have data."""
+    completed = set()
+    with get_session() as session:
+        if session.query(JobPosting).count() > 0:
+            completed.add("job_posting")
+        if session.query(Application).filter(Application.screening_score.isnot(None)).count() > 0:
+            completed.add("resume_selection")
+        if session.query(Interview).count() > 0:
+            completed.add("interview_scheduling")
+        if session.query(Feedback).count() > 0:
+            completed.add("feedback_collection")
+        if session.query(Ranking).count() > 0:
+            completed.add("candidate_ranking")
+        if session.query(Offer).count() > 0:
+            completed.add("final_selection")
+    return completed
+
+
+def _render_pipeline_progress():
+    """Render a coloured stage-progress bar based on DB state."""
+    completed = _get_completed_stages()
+    stages = [
+        ("📋 Job Posting", "job_posting"),
+        ("📄 Resume Screening", "resume_selection"),
+        ("📅 Interviews", "interview_scheduling"),
+        ("💬 Feedback", "feedback_collection"),
+        ("🏆 Ranking", "candidate_ranking"),
+        ("✅ Selection", "final_selection"),
+    ]
+    pills_html = ""
+    for label, key in stages:
+        css_class = "stage-done" if key in completed else "stage-pending"
+        pills_html += f'<div class="stage-pill {css_class}">{label}</div>'
+
+    st.markdown(f'<div class="stage-progress">{pills_html}</div>', unsafe_allow_html=True)
+
+
+# --- Helper: dataframe → CSV download button ---
+def _csv_download(df: pd.DataFrame, filename: str, label: str = "📥 Download CSV"):
+    """Render a download button for a DataFrame."""
+    csv_bytes = df.to_csv(index=False).encode("utf-8")
+    st.download_button(label=label, data=csv_bytes, file_name=filename, mime="text/csv")
+
 
 # --- Sidebar ---
 st.sidebar.markdown("## 🏢 HR Agent System")
@@ -70,12 +141,14 @@ page = st.sidebar.radio(
     "Navigate",
     ["📊 Dashboard", "📋 Job Postings", "👥 Candidates",
      "📅 Interviews", "💬 Feedback", "🏆 Rankings",
-     "✅ Decisions", "🚀 Run Pipeline"],
+     "✅ Decisions", "📈 Compare Candidates", "🚀 Run Pipeline"],
     index=0,
 )
 
 
-# --- Dashboard Page ---
+# ======================================================================
+# DASHBOARD
+# ======================================================================
 if page == "📊 Dashboard":
     st.markdown('<div class="main-header">HR Recruitment Dashboard</div>', unsafe_allow_html=True)
     st.markdown("Multi-agent pipeline powered by LangGraph")
@@ -97,22 +170,8 @@ if page == "📊 Dashboard":
     st.divider()
 
     # Pipeline stages visualization
-    st.subheader("🔄 Pipeline Stages")
-    stages = [
-        ("📋 Job Posting", "Creates job descriptions"),
-        ("📄 Resume Selection", "Screens & shortlists candidates"),
-        ("📅 Interview Scheduling", "Schedules interview rounds"),
-        ("💬 Feedback Collection", "Gathers interviewer feedback"),
-        ("🏆 Candidate Ranking", "Computes composite scores"),
-        ("✅ Final Selection", "Makes hire/reject decisions"),
-    ]
-
-    cols = st.columns(6)
-    for i, (name, desc) in enumerate(stages):
-        with cols[i]:
-            st.markdown(f"**{name}**")
-            st.caption(desc)
-            st.markdown(f"Stage {i+1}")
+    st.subheader("🔄 Pipeline Progress")
+    _render_pipeline_progress()
 
     st.divider()
 
@@ -131,7 +190,9 @@ if page == "📊 Dashboard":
             st.info("No pipeline results yet. Run a pipeline to see activity here!")
 
 
-# --- Job Postings Page ---
+# ======================================================================
+# JOB POSTINGS
+# ======================================================================
 elif page == "📋 Job Postings":
     st.header("📋 Job Postings")
 
@@ -162,7 +223,9 @@ elif page == "📋 Job Postings":
             st.info("No job postings yet. Run the pipeline to create one!")
 
 
-# --- Candidates Page ---
+# ======================================================================
+# CANDIDATES
+# ======================================================================
 elif page == "👥 Candidates":
     st.header("👥 Candidates")
 
@@ -185,7 +248,9 @@ elif page == "👥 Candidates":
                     "Status": f"{status_emoji} {c.status}",
                 })
 
-            st.dataframe(data, use_container_width=True)
+            df = pd.DataFrame(data)
+            st.dataframe(df, use_container_width=True)
+            _csv_download(df, "candidates.csv")
 
             # Detailed view
             st.subheader("Candidate Details")
@@ -200,7 +265,9 @@ elif page == "👥 Candidates":
             st.info("No candidates yet.")
 
 
-# --- Interviews Page ---
+# ======================================================================
+# INTERVIEWS
+# ======================================================================
 elif page == "📅 Interviews":
     st.header("📅 Scheduled Interviews")
 
@@ -220,12 +287,16 @@ elif page == "📅 Interviews":
                     "Status": f"{status_color} {i.status}",
                 })
 
-            st.dataframe(data, use_container_width=True)
+            df = pd.DataFrame(data)
+            st.dataframe(df, use_container_width=True)
+            _csv_download(df, "interviews.csv")
         else:
             st.info("No interviews scheduled yet.")
 
 
-# --- Feedback Page ---
+# ======================================================================
+# FEEDBACK
+# ======================================================================
 elif page == "💬 Feedback":
     st.header("💬 Interview Feedback")
 
@@ -261,7 +332,9 @@ elif page == "💬 Feedback":
             st.info("No feedback submitted yet.")
 
 
-# --- Rankings Page ---
+# ======================================================================
+# RANKINGS
+# ======================================================================
 elif page == "🏆 Rankings":
     st.header("🏆 Candidate Rankings")
 
@@ -285,7 +358,9 @@ elif page == "🏆 Rankings":
                     "Overall Score": f"{r.overall_score:.1f}/10" if r.overall_score else "N/A",
                 })
 
-            st.dataframe(data, use_container_width=True)
+            df = pd.DataFrame(data)
+            st.dataframe(df, use_container_width=True)
+            _csv_download(df, "rankings.csv")
 
             # Detailed analysis
             st.subheader("Detailed Analysis")
@@ -300,7 +375,9 @@ elif page == "🏆 Rankings":
             st.info("No rankings computed yet.")
 
 
-# --- Decisions Page ---
+# ======================================================================
+# DECISIONS
+# ======================================================================
 elif page == "✅ Decisions":
     st.header("✅ Final Decisions")
 
@@ -320,6 +397,19 @@ elif page == "✅ Decisions":
 
             st.divider()
 
+            # Export
+            dec_data = []
+            for d in decisions:
+                dec_data.append({
+                    "Candidate": d.candidate.name if d.candidate else "Unknown",
+                    "Job": d.job_posting.title if d.job_posting else "Unknown",
+                    "Decision": d.decision.upper(),
+                    "Salary Offered": d.salary_offered or "—",
+                    "Justification": (d.justification or "")[:120],
+                })
+            dec_df = pd.DataFrame(dec_data)
+            _csv_download(dec_df, "decisions.csv")
+
             for d in decisions:
                 emoji = {"offer": "✅", "reject": "❌", "waitlist": "⏳"}.get(d.decision, "❓")
                 candidate_name = d.candidate.name if d.candidate else "Unknown"
@@ -336,7 +426,63 @@ elif page == "✅ Decisions":
             st.info("No decisions made yet.")
 
 
-# --- Run Pipeline Page ---
+# ======================================================================
+# COMPARE CANDIDATES  (NEW)
+# ======================================================================
+elif page == "📈 Compare Candidates":
+    st.header("📈 Candidate Comparison")
+    st.markdown("Side-by-side comparison of ranked candidates.")
+
+    with get_session() as session:
+        rankings = session.query(Ranking).order_by(Ranking.rank).all()
+
+        if rankings:
+            # Build comparison data
+            names = []
+            resume_scores = []
+            interview_scores = []
+            overall_scores = []
+
+            for r in rankings:
+                name = r.application.candidate.name if r.application and r.application.candidate else "Unknown"
+                names.append(name)
+                resume_scores.append(r.resume_score or 0)
+                interview_scores.append(r.interview_score or 0)
+                overall_scores.append(r.overall_score or 0)
+
+            # Bar chart comparison
+            chart_df = pd.DataFrame({
+                "Resume Score": resume_scores,
+                "Interview Score": interview_scores,
+                "Overall Score": overall_scores,
+            }, index=names)
+
+            st.bar_chart(chart_df, height=400)
+
+            st.divider()
+
+            # Side-by-side detail cards (top 3)
+            top_n = min(3, len(rankings))
+            st.subheader(f"Top {top_n} Candidates — Detail Comparison")
+            cols = st.columns(top_n)
+            for idx, r in enumerate(rankings[:top_n]):
+                with cols[idx]:
+                    name = r.application.candidate.name if r.application and r.application.candidate else "Unknown"
+                    medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(r.rank, f"#{r.rank}")
+                    st.markdown(f"### {medal} {name}")
+                    st.metric("Overall", f"{r.overall_score:.1f}/10")
+                    st.metric("Resume", f"{r.resume_score:.1f}/10" if r.resume_score else "N/A")
+                    st.metric("Interview", f"{r.interview_score:.1f}/10" if r.interview_score else "N/A")
+                    if r.analysis:
+                        st.markdown("**Analysis:**")
+                        st.caption(r.analysis[:300] + ("..." if len(r.analysis) > 300 else ""))
+        else:
+            st.info("No rankings available yet. Run the pipeline first.")
+
+
+# ======================================================================
+# RUN PIPELINE
+# ======================================================================
 elif page == "🚀 Run Pipeline":
     st.header("🚀 Run HR Pipeline")
     st.markdown("Start a new automated hiring pipeline.")
@@ -442,6 +588,9 @@ Proceed through all 6 stages of the pipeline.
                         "next_agent": "",
                         "pipeline_status": "running",
                         "error_message": None,
+                        "retry_count": 0,
+                        "max_retries": settings.AGENT_MAX_RETRIES,
+                        "failed_stages": [],
                         "job_posting_id": None,
                         "job_posting": None,
                         "candidates": candidates,
@@ -450,6 +599,7 @@ Proceed through all 6 stages of the pipeline.
                         "interview_feedback": [],
                         "candidate_rankings": [],
                         "final_decisions": [],
+                        "stage_metrics": [],
                     }
 
                     with st.spinner("Running pipeline through all 6 agents..."):
@@ -457,6 +607,17 @@ Proceed through all 6 stages of the pipeline.
 
                     st.success("✅ Pipeline completed successfully!")
                     st.balloons()
+
+                    # Show stage metrics
+                    metrics = result.get("stage_metrics", [])
+                    if metrics:
+                        st.subheader("⏱️ Stage Performance")
+                        metrics_df = pd.DataFrame(metrics)
+                        st.dataframe(metrics_df, use_container_width=True)
+
+                    failed = result.get("failed_stages", [])
+                    if failed:
+                        st.warning(f"⚠️ Some stages failed: {', '.join(failed)}")
 
                     st.markdown("Navigate to other tabs to see the results.")
 
@@ -470,4 +631,4 @@ Proceed through all 6 stages of the pipeline.
 # --- Footer ---
 st.sidebar.divider()
 st.sidebar.caption("Built with LangGraph + Streamlit")
-st.sidebar.caption("Multi-Agent HR Recruitment System v1.0")
+st.sidebar.caption("Multi-Agent HR Recruitment System v2.0")
