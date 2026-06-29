@@ -1,7 +1,7 @@
 # 🏢 HR Multi-Agent Recruitment System — Architecture Document
 
-> **Version:** 2.0  
-> **Last Updated:** 2026-06-20  
+> **Version:** 2.1  
+> **Last Updated:** 2026-06-29  
 > **Author:** Auto-generated from source-code analysis
 
 ---
@@ -29,9 +29,10 @@
 9. [Resilience & Error Handling](#9-resilience--error-handling)
 10. [Complete Tech Stack Summary](#10-complete-tech-stack-summary)
 11. [Project Directory Structure](#11-project-directory-structure)
-12. [Deployment Guide — GCP](#12-deployment-guide--gcp)
-13. [Deployment Guide — AWS](#13-deployment-guide--aws)
-14. [Deployment Guide — Azure](#14-deployment-guide--azure)
+12. [A2A Communication (Future)](#12-a2a-communication-future)
+13. [Deployment Guide — GCP](#13-deployment-guide--gcp)
+14. [Deployment Guide — AWS](#14-deployment-guide--aws)
+15. [Deployment Guide — Azure](#15-deployment-guide--azure)
 
 ---
 
@@ -134,8 +135,8 @@ The **HR Multi-Agent Recruitment System** automates the end-to-end hiring pipeli
 |--------|--------|
 | **Tech Stack** | `python-dotenv`, `os.getenv()`, Python `logging`, `SQLAlchemy` |
 | **Files** | `config/settings.py`, `config/logging_config.py`, `database/db.py` |
-| **Data** | `.env` file → `Settings` singleton; `hr_system.db` → SQLAlchemy `engine` |
-| **Key Config** | `OPENAI_API_KEY`, `LLM_MODEL` (gpt-4o-mini), `LLM_TEMPERATURE` (0.1), `DATABASE_URL` (sqlite), `AGENT_RECURSION_LIMIT` (25), `AGENT_TIMEOUT_SECONDS` (120), `AGENT_MAX_RETRIES` (2) |
+| **Data** | `.env` file → `Settings` module-level instance; `hr_system.db` → SQLAlchemy `engine` |
+| **Key Config** | `OPENAI_API_KEY`, `LLM_MODEL` (gpt-4o-mini), `LLM_TEMPERATURE` (0.1), `DATABASE_URL` (sqlite), `API_HOST` (0.0.0.0), `API_PORT` (8000), `RESUME_SHORTLIST_THRESHOLD` (60), `MAX_INTERVIEWS_PER_CANDIDATE` (3), `AGENT_RECURSION_LIMIT` (25), `AGENT_TIMEOUT_SECONDS` (120), `AGENT_MAX_RETRIES` (2), `LOG_LEVEL` (INFO) |
 
 **Flow:**
 ```
@@ -156,7 +157,7 @@ Base.metadata.create_all()  →  7 tables created in SQLite
 | Aspect | Detail |
 |--------|--------|
 | **Tech Stack** | Python `TypedDict`, `langchain_core.messages.HumanMessage`, `langgraph.graph.message.add_messages` reducer |
-| **Files** | `state/hr_state.py`, `main.py` (lines 138–177) |
+| **Files** | `state/hr_state.py`, `main.py` (lines 138–177), `state/hr_state.py` exports `STAGES` constant dict |
 | **Data** | Initial `HumanMessage` with job title/requirements/candidates, sample candidate dicts seeded into the DB |
 
 **HRState fields:**
@@ -282,8 +283,9 @@ agent_node (LLM reasoning) ──► should_continue?
 - Minimum 2 interviews per candidate (technical + behavioral)
 - Different interviewers for different types
 - Slots spaced ≥ 30 minutes apart
-- Available slots: 09:00–16:30 (excluding already-booked slots)
+- Available slots: 09:00–11:30, 13:00–16:30 (lunch break 12:00–12:30 excluded, already-booked slots excluded)
 - Auto-generates meeting links: `https://meet.example.com/hr-interview-{candidate_id}-{type}`
+- Default interview duration: 60 minutes
 
 ---
 
@@ -517,7 +519,9 @@ def agent_wrapper_node(state):
 
 **Table Count:** 7  
 **ORM:** SQLAlchemy 2.0+ with `declarative_base()`  
-**Database:** SQLite (file: `hr_system.db`) — swappable to PostgreSQL/MySQL via `DATABASE_URL`
+**Database:** SQLite (file: `hr_system.db`) — swappable to PostgreSQL/MySQL via `DATABASE_URL`  
+**Session Management:** `get_session()` context manager (auto-commit/rollback), `get_db_session()` raw session  
+**Schema Ops:** `init_db()` creates tables, `drop_db()` tears them down
 
 ---
 
@@ -739,17 +743,18 @@ hr-multi-agent-system/
 ├── .gitignore                       # Git ignore rules
 ├── README.md                        # Project README
 ├── architecture.md                  # This file
+├── a2a.md                           # A2A (Agent-to-Agent) protocol migration plan
 ├── hr_system.db                     # SQLite database (auto-generated)
 │
 ├── config/                          # ⚙️ Configuration Layer
 │   ├── __init__.py
-│   ├── settings.py                  # Environment-based Settings class (singleton)
+│   ├── settings.py                  # Environment-based Settings class (module-level instance)
 │   ├── logging_config.py            # Centralized logging setup
 │   └── metrics.py                   # StageTimer context manager
 │
 ├── state/                           # 📦 Shared State
 │   ├── __init__.py
-│   └── hr_state.py                  # HRState TypedDict + stage constants
+│   └── hr_state.py                  # HRState TypedDict + STAGES constant dict
 │
 ├── graph/                           # 🔀 Pipeline Orchestration
 │   ├── __init__.py
@@ -776,12 +781,12 @@ hr-multi-agent-system/
 │
 ├── database/                        # 💾 Data Layer
 │   ├── __init__.py
-│   ├── db.py                        # SQLAlchemy engine, session management
-│   └── models.py                    # 7 ORM models (Base declarative)
+│   ├── db.py                        # SQLAlchemy engine, session management (init_db, drop_db, get_session, get_db_session)
+│   └── models.py                    # 7 ORM models (Base declarative), each with to_dict()
 │
 ├── api/                             # 🌐 REST API
 │   ├── __init__.py
-│   ├── server.py                    # FastAPI app + all endpoints
+│   ├── server.py                    # FastAPI app + all endpoints (lifespan-based startup)
 │   └── schemas.py                   # Pydantic request/response models
 │
 └── ui/                              # 🖥️ Dashboard
@@ -790,7 +795,25 @@ hr-multi-agent-system/
 
 ---
 
-## 12. Deployment Guide — GCP (Google Cloud Platform)
+## 12. A2A Communication (Future)
+
+A detailed plan exists to migrate the current shared-state architecture to the **Google A2A (Agent-to-Agent) Protocol**, turning each agent into an independent, discoverable HTTP microservice communicating via JSON-RPC 2.0.
+
+Key highlights of the A2A plan:
+
+| Aspect | Detail |
+|--------|--------|
+| **Document** | [`a2a.md`](file:///c:/Users/abhin/OneDrive/Documents/my_projects/hr-multi-agent-system/a2a.md) |
+| **Protocol** | JSON-RPC 2.0 with `message/send`, `message/stream`, `tasks/get`, `tasks/cancel` |
+| **Discovery** | Each agent publishes an Agent Card at `/.well-known/agent.json` |
+| **Task Lifecycle** | `submitted → working → completed | failed | canceled` |
+| **Benefits** | Decoupled agents, independent deployment/scaling, runtime discovery, language-agnostic |
+
+This migration is **not yet implemented** — the current system uses the shared `HRState` TypedDict approach described in this document.
+
+---
+
+## 13. Deployment Guide — GCP (Google Cloud Platform)
 
 ### Architecture on GCP
 
@@ -967,7 +990,7 @@ gcloud run domain-mappings create \
 
 ---
 
-## 13. Deployment Guide — AWS (Amazon Web Services)
+## 14. Deployment Guide — AWS (Amazon Web Services)
 
 ### Architecture on AWS
 
@@ -1192,7 +1215,7 @@ docker push YOUR_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/hr-system-dashboard:
 
 ---
 
-## 14. Deployment Guide — Azure
+## 15. Deployment Guide — Azure
 
 ### Architecture on Azure
 
@@ -1453,4 +1476,25 @@ Before deploying to production, ensure:
 
 ---
 
-*Generated from source code analysis of the HR Multi-Agent Recruitment System v2.0*
+## Appendix: Environment Variable Reference
+
+Complete list of environment variables recognized by the system (see [.env.example](file:///c:/Users/abhin/OneDrive/Documents/my_projects/hr-multi-agent-system/.env.example)):
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `OPENAI_API_KEY` | *(required)* | OpenAI API key for LLM inference |
+| `LLM_MODEL` | `gpt-4o-mini` | Model name for all agents + supervisor |
+| `LLM_TEMPERATURE` | `0.1` | Default temperature for agent LLM calls |
+| `DATABASE_URL` | `sqlite:///./hr_system.db` | SQLAlchemy database URL |
+| `API_HOST` | `0.0.0.0` | FastAPI server bind address |
+| `API_PORT` | `8000` | FastAPI server port |
+| `RESUME_SHORTLIST_THRESHOLD` | `60` | Minimum screening score (0–100) to auto-shortlist |
+| `MAX_INTERVIEWS_PER_CANDIDATE` | `3` | Maximum interviews scheduled per candidate |
+| `AGENT_RECURSION_LIMIT` | `25` | Max LLM ↔ tool loops per agent sub-graph |
+| `AGENT_TIMEOUT_SECONDS` | `120` | Max wall-clock time per agent |
+| `AGENT_MAX_RETRIES` | `2` | Retries before supervisor skips a failed stage |
+| `LOG_LEVEL` | `INFO` | Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL) |
+
+---
+
+*Generated from source code analysis of the HR Multi-Agent Recruitment System v2.1*
