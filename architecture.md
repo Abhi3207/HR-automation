@@ -4,6 +4,7 @@
 > **Last Updated:** 2026-06-29  
 > **Author:** Auto-generated from source-code analysis
 
+lets think of new architechture and update it
 ---
 
 ## Table of Contents

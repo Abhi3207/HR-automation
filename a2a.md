@@ -4,6 +4,8 @@
 
 ---
 
+Reevaluate this a2a communication setup
+
 ## 1. Why A2A?
 
 | Current (Shared State) | Target (A2A Protocol) |
