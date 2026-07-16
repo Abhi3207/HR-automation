@@ -3,7 +3,7 @@ Tools for the Interview Scheduling Agent.
 Handles scheduling interviews and managing the calendar.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from langchain_core.tools import tool
 from database.db import get_session
 from database.models import Interview, Candidate
@@ -38,10 +38,10 @@ def schedule_interview(
         try:
             date = datetime.strptime(scheduled_date, "%Y-%m-%d")
         except ValueError:
-            date = datetime.utcnow() + timedelta(days=1)
+            date = datetime.now(timezone.utc) + timedelta(days=1)
     else:
         # Default to next business day
-        date = datetime.utcnow() + timedelta(days=1)
+        date = datetime.now(timezone.utc) + timedelta(days=1)
         while date.weekday() >= 5:  # Skip weekends
             date += timedelta(days=1)
 
@@ -134,7 +134,7 @@ def get_available_slots(date: str = "") -> list[str]:
     ]
 
     if not date:
-        target_date = datetime.utcnow() + timedelta(days=1)
+        target_date = datetime.now(timezone.utc) + timedelta(days=1)
         date = target_date.strftime("%Y-%m-%d")
 
     # Check which slots are already booked

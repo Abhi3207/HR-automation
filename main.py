@@ -10,7 +10,6 @@ Usage:
 """
 
 import argparse
-import logging
 import sys
 from pathlib import Path
 
@@ -296,7 +295,14 @@ def main():
 
     # Apply verbose logging if requested
     if args.verbose:
-        logging.getLogger().setLevel(logging.DEBUG)
+        import logging as _logging
+        # Reset handlers so setup_logging() can re-apply with DEBUG level
+        root = _logging.getLogger()
+        root.handlers.clear()
+        import os
+        os.environ["LOG_LEVEL"] = "DEBUG"
+        from config.logging_config import setup_logging
+        setup_logging()
 
     commands = {
         "run": run_demo,

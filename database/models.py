@@ -6,7 +6,7 @@ Defines all database entities for the recruitment pipeline.
 from datetime import datetime, timezone
 from sqlalchemy import (
     Column, Integer, String, Text, Float, DateTime,
-    ForeignKey, Enum, JSON, Boolean
+    ForeignKey, JSON, Boolean
 )
 from sqlalchemy.orm import declarative_base, relationship
 
@@ -34,7 +34,7 @@ class JobPosting(Base):
     applications = relationship("Application", back_populates="job_posting")
     offers = relationship("Offer", back_populates="job_posting")
 
-    def to_dict(self):
+    def to_dict(self) -> dict:
         return {
             "id": self.id,
             "title": self.title,
@@ -70,13 +70,13 @@ class Candidate(Base):
     interviews = relationship("Interview", back_populates="candidate")
     offers = relationship("Offer", back_populates="candidate")
 
-    def to_dict(self):
+    def to_dict(self) -> dict:
         return {
             "id": self.id,
             "name": self.name,
             "email": self.email,
             "phone": self.phone,
-            "resume_text": self.resume_text[:200] + "..." if len(self.resume_text) > 200 else self.resume_text,
+            "resume_text": (self.resume_text[:200] + "...") if self.resume_text and len(self.resume_text) > 200 else (self.resume_text or ""),
             "skills": self.skills,
             "experience_years": self.experience_years,
             "education": self.education,
@@ -102,7 +102,7 @@ class Application(Base):
     job_posting = relationship("JobPosting", back_populates="applications")
     rankings = relationship("Ranking", back_populates="application")
 
-    def to_dict(self):
+    def to_dict(self) -> dict:
         return {
             "id": self.id,
             "candidate_id": self.candidate_id,
@@ -136,7 +136,7 @@ class Interview(Base):
     candidate = relationship("Candidate", back_populates="interviews")
     feedback = relationship("Feedback", back_populates="interview", uselist=False)
 
-    def to_dict(self):
+    def to_dict(self) -> dict:
         return {
             "id": self.id,
             "candidate_id": self.candidate_id,
@@ -169,7 +169,7 @@ class Feedback(Base):
     # Relationships
     interview = relationship("Interview", back_populates="feedback")
 
-    def to_dict(self):
+    def to_dict(self) -> dict:
         return {
             "id": self.id,
             "interview_id": self.interview_id,
@@ -202,7 +202,7 @@ class Ranking(Base):
     # Relationships
     application = relationship("Application", back_populates="rankings")
 
-    def to_dict(self):
+    def to_dict(self) -> dict:
         return {
             "id": self.id,
             "application_id": self.application_id,
@@ -233,7 +233,7 @@ class Offer(Base):
     candidate = relationship("Candidate", back_populates="offers")
     job_posting = relationship("JobPosting", back_populates="offers")
 
-    def to_dict(self):
+    def to_dict(self) -> dict:
         return {
             "id": self.id,
             "candidate_id": self.candidate_id,

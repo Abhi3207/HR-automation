@@ -2,7 +2,7 @@
 Database session management and initialization.
 """
 
-from typing import Generator
+from collections.abc import Generator
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
 from contextlib import contextmanager

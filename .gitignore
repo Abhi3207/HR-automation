@@ -37,4 +37,3 @@ logs/
 
 # Gemini
 .gemini/
-.env.example
